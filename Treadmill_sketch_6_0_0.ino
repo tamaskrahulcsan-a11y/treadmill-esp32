@@ -331,7 +331,10 @@ void setup() {
   pinMode(OPTO_SENSOR_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(OPTO_SENSOR_PIN), optoISR, RISING);
 
-  LittleFS.begin(true);
+   if (!LittleFS.begin(true)) {  //ESP32 fájlrendszer inicializálása, a WEBSZERVER HTML adatait tartalmazza
+    Serial.println("LittleFS mount failed!");
+  }
+  printFileSystemSpace();
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) delay(500);
@@ -344,11 +347,6 @@ void setup() {
   //timeClient.setTimeOffset(3600);
   ThingSpeak.begin(client);
 
-  if (!LittleFS.begin(true)) {  //ESP32 fájlrendszer inicializálása, a WEBSZERVER HTML adatait tartalmazza
-    Serial.println("LittleFS mount failed!");
-  }
-
-  PrintFileSystemSpace();
 
   // ===== WEB ROUTE: index.html =====
   server.on("/", HTTP_GET, []() {
@@ -466,9 +464,9 @@ void loop() {
     if (now - lastStepTime > 3000) stepRate = 0;  // Ha 3 másodpercig nincs lépés, kinullázza a stepRate-et
 
     if (debugLevel == 2) {  //grafikon
-      Serial.print(azNorm * 1000);      Serial.print(", ");
+      Serial.print(azN * 1000);      Serial.print(", ");
       Serial.print(stepDetected ? 1000 : -1000);      Serial.print(", ");
-      Serial.print(stepDetectionDeadTimeActive ? 500 : -500); Serial.print(", ");
+      Serial.print(dead ? 500 : -500); Serial.print(", "); //stepDetectionDeadTimeActive
       Serial.print(-1500); Serial.print(", ");
       Serial.print(1500);  Serial.print(", ");
       Serial.println();
@@ -513,7 +511,7 @@ void loop() {
   }
 
   if (elapsedHallPulse > 0){
-    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %d\n", formattedTime, filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
+    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %d\n", formattedTime.c_str(), filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
     elapsedHallPulse = 0;
   }
 
