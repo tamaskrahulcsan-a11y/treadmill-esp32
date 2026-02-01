@@ -518,7 +518,7 @@ void loop() {
   }
 
   if (elapsedHallPulse > 0){
-    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %lu\n", formattedTime.c_str(), filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
+    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %lu \n", formattedTime.c_str(), filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
     elapsedHallPulse = 0;
   }
 
