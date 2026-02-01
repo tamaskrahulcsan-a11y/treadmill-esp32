@@ -305,16 +305,23 @@ void handleDelete() {
 
 void handleDeleteAll() {
   File root = LittleFS.open("/");
+  if (!root) {
+    server.send(500, "text/plain", "FS open error");
+    return;
+  }
   File f = root.openNextFile();
-  int cnt=0;
-  while(f){
-    if(String(f.name())!="/index.html"){
+  int cnt = 0;
+  while (f) {
+    String name = String(f.name());
+    if (name != "/index.html") {
       LittleFS.remove(f.name());
       cnt++;
     }
-    f=root.openNextFile();
+    f.close();
+    f = root.openNextFile();
   }
-  server.send(200,"text/plain","deleted "+String(cnt));
+  root.close();
+  server.send(200, "text/plain", "deleted " + String(cnt));
 }
 
 
@@ -511,7 +518,7 @@ void loop() {
   }
 
   if (elapsedHallPulse > 0){
-    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %d\n", formattedTime.c_str(), filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
+    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %lu\n", formattedTime.c_str(), filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
     elapsedHallPulse = 0;
   }
 
