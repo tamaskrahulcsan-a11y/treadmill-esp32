@@ -337,11 +337,10 @@ void setup() {
   });
 
   // ===== FILE HANDLERS =====
- // server.on("/list", HTTP_GET, handleListFiles);
- // server.on("/download", HTTP_GET, handleDownload);
- // server.on("/delete", HTTP_DELETE, handleDelete);
- // server.on("/deleteAll", HTTP_DELETE, handleDeleteAll);
-
+  server.on("/list", HTTP_GET, handleListFiles);
+  server.on("/download", HTTP_GET, handleDownload);
+  server.on("/delete", HTTP_DELETE, handleDelete);
+  server.on("/deleteAll", HTTP_DELETE, handleDeleteAll);
 
   server.begin();
   Serial.println("Webserver OK");
@@ -410,7 +409,8 @@ void loop() {
   }
 
   // ===== SEBESSÉG (1 mp) =====
-  if (now - lastSpeedCalcTime >= 1000) {
+  timeDeviation = now - lastSpeedCalcTime;
+  if (timeDeviation >= 1000) {
     lastSpeedCalcTime = now;
 
     speed_kmh = (hallPulseCount * BELT_DISTANCE / 100.0) * 3.6;  // cm -> m, m/s -> km/h
@@ -434,7 +434,9 @@ void loop() {
     }
     // Lépésszámláló érzékenységének finomhangolása a sebesség függvényében
     STEP_THRESHOLD_TIME_TUNED = STEP_THRESHOLD_TIME - (filteredSpeed_kmh * 12.0);
-    if (filteredSpeed_kmh > 5) { STEP_THRESHOLD_HIGH_TUNED = STEP_THRESHOLD_HIGH + 0.02; 
+    if (filteredSpeed_kmh > 5) { 
+      STEP_THRESHOLD_HIGH_TUNED = STEP_THRESHOLD_HIGH + 0.02; 
+    }
 
     temperature = mpu.getTemperature() / 340.0 + 36.53;  // Az MPU6050 hőmérséklet korrekciója
   }
@@ -462,6 +464,5 @@ void loop() {
   }
 }
 
-}
 
 
