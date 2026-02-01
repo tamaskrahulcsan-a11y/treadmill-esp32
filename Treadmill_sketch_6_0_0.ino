@@ -30,16 +30,16 @@
 #include <NTPClient.h> // Net idő
 #include <WiFiUdp.h>
 
+#include "BLE_HeartRate.h"
+#include "Treadmill_logger.h"
+
 #include "netdef.h" //Az alábbi 4 darab hálózati azonosítók definíciós file-ja.
 //#define WIFI_SSID 
 //#define WIFI_PASSWORD 
 //#define THINGSPEAK_API_KEY   
 //#define YOUR_CHANNEL_ID 
 
-#define DEBUG 0
-
-#include "BLE_HeartRate.h"
-#include "Treadmill_logger.h"
+#define DEBUG 1  //
 
 // ================== HARDVER KONFIG ==================
 #define HALL_SENSOR_PIN 15  //szalagmozgató orsón levő szenzor 1 impulzus fordulatonként. Orsó átmérő 49mm
@@ -57,7 +57,7 @@
 #define MEDIANFILTER_FOR_STEP 11
 
 float ALPHA_TILT  = 0.01;  // Exponenciális szűrő súlyozási tényezője, incline detektálás
-float ALPHA_SPEED = 0.3;   // Exponenciális szűrő súlyozási tényezője, sebesség detektálás
+float ALPHA_SPEED = 0.5;   // Exponenciális szűrő súlyozási tényezője, sebesség detektálás
 
 // Lépésdetektálás paraméterek
 float STEP_THRESHOLD_HIGH = 1.13;   // Lépésérzékelési küszöb felső érték (lágy lépéshez)
@@ -74,11 +74,13 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600, 60000);
 
 // ================== GLOBÁLIS VÁLTOZÓK ==================
-volatile unsigned long hallPulseCount = 0;
+volatile unsigned long hallPulseCount = 0;   //Orsó sebesség 
+volatile unsigned long hallPulseCount2 = 0;  //Orsó sebesség relatív a szalagsebességhez detektáláás
 
 // Opto
 volatile unsigned long lastOptoTime = 0;
 volatile unsigned long optoPulseTime = 0;
+volatile unsigned long elapsedHallPulse = 0; //Szalagcsúszás detektálás
 volatile bool optoNewPulse = false;
 
 // Sebességek
@@ -106,23 +108,48 @@ float stepRate = 0;
 // Egyéb
 float temperature = 0.0;    // Hőmérséklet változó
 String formattedTime;
+char buf[16]; //for time
+int debugLevel;
+
 
 // ================== IDŐZÍTÉSEK ==================
 unsigned long lastSpeedCalcTime = 0;
 unsigned long lastSerialOutputTime = 0;
 
 // ================== INTERRUPTOK ==================
-void IRAM_ATTR hallISR() {
-  hallPulseCount = hallPulseCount + 1;   // szalagmozgató orsó fordulat detektálás
+void IRAM_ATTR hallISR() {  // szalagmozgató orsó fordulat detektálás
+  hallPulseCount = hallPulseCount + 1;   // sebesség érzékelés
+  hallPulseCount2 = hallPulseCount2 +1;  // szalagcsúszás érzékeléd
 }
 
-void IRAM_ATTR optoISR() {
+void IRAM_ATTR optoISR() {  // szalagfordulat detektálás
   unsigned long now = micros();
   if (now - lastOptoTime < OPTO_DEBOUNCE_US) return;
   optoPulseTime = now - lastOptoTime;
   lastOptoTime = now;
-  optoNewPulse = true;  // szalagfordulat detektálás
+  optoNewPulse = true;  
+  elapsedHallPulse = hallPulseCount2;
+  hallPulseCount2 = 0;
 }
+
+
+// ================== UTILs ==================
+/* Buffer-alapú változat (javasolt beágyazott rendszeren) */
+void formatTimeFromMsBuf(unsigned long ms, char *outBuf, size_t outBufSize) {
+  if (!outBuf || outBufSize < 12) { // legalább "hh:mm:ss:cc\0"
+    if (outBuf && outBufSize > 0) outBuf[0] = '\0';
+    return;
+  }
+  unsigned long totalCs = ms / 10UL;
+  unsigned int cs = totalCs % 100UL;
+  unsigned long totalSec = ms / 1000UL;
+  unsigned int sec = totalSec % 60UL;
+  unsigned long totalMin = totalSec / 60UL;
+  unsigned int min = totalMin % 60UL;
+  unsigned long hours = totalMin / 60UL;
+  snprintf(outBuf, outBufSize, "%02lu:%02u:%02u:%02u", hours, min, sec, cs);
+}
+
 
 // ================== FILE UTILS ==================
 size_t getFileSize(const char* path) {
@@ -153,7 +180,7 @@ void serialPortHandling() {
     String input = Serial.readStringUntil('\n');
 
     if (input.startsWith("AT ")) {
-      float newAlpha = input.substring(6).toFloat();
+      float newAlpha = input.substring(3).toFloat();
       if (newAlpha >= 0.0 && newAlpha <= 1.0) {
         ALPHA_TILT = newAlpha;
         Serial.print("New ALPHA_TILT value set: ");
@@ -171,6 +198,12 @@ void serialPortHandling() {
       STEP_THRESHOLD_LOW = input.substring(3).toFloat();
       Serial.print("New STEP_THRESHOLD_LOW set: ");
       Serial.println(STEP_THRESHOLD_LOW);
+    }
+
+    else if (input.startsWith("DEB ")) {
+      debugLevel = input.substring(4).toInt();
+      Serial.print("New DEBUG level [0-3]: ");
+      Serial.println(debugLevel);
     }
 
     else if (input.startsWith("<!DOCTYPE html>")) {  //soros porton keresztül index.html (webszerver) feltöltése
@@ -222,23 +255,41 @@ TreadmillData getNextSample(uint16_t sec) {
 // ================== FILE HANDLEREK ==================
 void handleListFiles() {
   File root = LittleFS.open("/");
-  File f = root.openNextFile();
-  String json="[";
-  bool first=true;
-  while(f){
-    if(!first) json+=",";
-    json+="\""+String(f.name())+"\"";
-    first=false;
-    f=root.openNextFile();
+  if (!root) {
+    server.send(500, "text/plain", "FS open error");
+    return;
   }
-  json+="]";
-  server.send(200,"application/json",json);
+  File f = root.openNextFile();
+  String json = "[";
+  bool first = true;
+  while (f) {
+    if (!first) json += ",";
+    json += "\"" + String(f.name()) + "\"";
+    first = false;
+    f.close();                    // <-- zárjuk le a fájlt, mielőtt a következőt nyitjuk
+    f = root.openNextFile();
+  }
+  json += "]";
+  root.close();                   // <-- zárjuk le a root-ot
+  server.send(200, "application/json", json);
 }
 
 void handleDownload() {
-  if(!server.hasArg("file")) return;
-  File f = LittleFS.open(server.arg("file"),"r");
-  server.streamFile(f,"application/octet-stream");
+  if (!server.hasArg("file")) {
+    server.send(400, "text/plain", "missing file param");
+    return;
+  }
+  String path = server.arg("file");
+  if (!LittleFS.exists(path)) {
+    server.send(404, "text/plain", "not found");
+    return;
+  }
+  File f = LittleFS.open(path, "r");
+  if (!f) {
+    server.send(500, "text/plain", "unable to open file");
+    return;
+  }
+  server.streamFile(f, "application/octet-stream");
   f.close();
 }
 
@@ -269,6 +320,7 @@ void handleDeleteAll() {
 
 // ================== SETUP ==================
 void setup() {
+  debugLevel = DEBUG;
   Serial.begin(115200);
   Wire.begin();
   mpu.initialize();
@@ -291,6 +343,12 @@ void setup() {
   timeClient.begin();
   //timeClient.setTimeOffset(3600);
   ThingSpeak.begin(client);
+
+  if (!LittleFS.begin(true)) {  //ESP32 fájlrendszer inicializálása, a WEBSZERVER HTML adatait tartalmazza
+    Serial.println("LittleFS mount failed!");
+  }
+
+  PrintFileSystemSpace();
 
   // ===== WEB ROUTE: index.html =====
   server.on("/", HTTP_GET, []() {
@@ -395,7 +453,7 @@ void loop() {
       float medianStepTime = sb[MEDIANFILTER_FOR_STEP/2];
       stepRate = (medianStepTime > 200 && medianStepTime < 2000) ? 60000.0 / medianStepTime : 0;
       stepIndex = (stepIndex + 1) % MEDIANFILTER_FOR_STEP;
-      if (DEBUG == 3) {
+      if (debugLevel == 3) {
         Serial.print(stepIndex); Serial.print("  ");
         Serial.print(stepBuffer[stepIndex]); Serial.print("   ");
         Serial.print(lastStepTime); Serial.print("   ");
@@ -406,6 +464,15 @@ void loop() {
     }
     if (azN < STEP_THRESHOLD_LOW) stepDetected = false; // Ha a gyorsulás visszaesik, engedélyez új lépést
     if (now - lastStepTime > 3000) stepRate = 0;  // Ha 3 másodpercig nincs lépés, kinullázza a stepRate-et
+
+    if (debugLevel == 2) {  //grafikon
+      Serial.print(azNorm * 1000);      Serial.print(", ");
+      Serial.print(stepDetected ? 1000 : -1000);      Serial.print(", ");
+      Serial.print(stepDetectionDeadTimeActive ? 500 : -500); Serial.print(", ");
+      Serial.print(-1500); Serial.print(", ");
+      Serial.print(1500);  Serial.print(", ");
+      Serial.println();
+    }
   }
 
   // ===== SEBESSÉG (1 mp) =====
@@ -428,10 +495,14 @@ void loop() {
       optoNewPulse = false;
       float v = (BELT_LENGTH_M / (optoPulseTime / 1e6)) * 3.6; 
       beltSpeed_kmh = v;
-      slipPercent = (filteredSpeed_kmh > 0.1)
-          ? (filteredSpeed_kmh - beltSpeed_kmh) / filteredSpeed_kmh * 100.0
-          : 0;
+      slipPercent = (filteredSpeed_kmh > 0.1) ? (filteredSpeed_kmh - beltSpeed_kmh) / filteredSpeed_kmh * 100.0  : 0;
     }
+
+    if (filteredSpeed_kmh < 0.2) {
+      beltSpeed_kmh = 0;
+      slipPercent = 0;
+    }
+
     // Lépésszámláló érzékenységének finomhangolása a sebesség függvényében
     STEP_THRESHOLD_TIME_TUNED = STEP_THRESHOLD_TIME - (filteredSpeed_kmh * 12.0);
     if (filteredSpeed_kmh > 5) { 
@@ -441,27 +512,33 @@ void loop() {
     temperature = mpu.getTemperature() / 340.0 + 36.53;  // Az MPU6050 hőmérséklet korrekciója
   }
 
+  if (elapsedHallPulse > 0){
+    Serial.printf("%s | Speed %.1f km/h | Belt %.1f km/h | Pulse %d\n", formattedTime, filteredSpeed_kmh, beltSpeed_kmh, elapsedHallPulse);
+    elapsedHallPulse = 0;
+  }
+
+
   // ===== SERIAL DEBUG =====
   if (now - lastSerialOutputTime >= 1000) {
     lastSerialOutputTime = now;
-    if (DEBUG == 0) {
-      Serial.printf("Speed %.1f km/h | Belt %.1f km/h | Slip %.1f %% | Tilt %.1f ° | Steps %.1f | HR %d\n",
-                  filteredSpeed_kmh, beltSpeed_kmh, slipPercent, filteredTilt, stepRate, heartRate);
+    if (debugLevel == 1) {
+      Serial.printf("Speed %.1f km/h | Belt %.1f km/h | Slip %.1f %% | Tilt %.1f ° | Steps %.1f | HR %d | Temp %.1f °C \n",
+                  filteredSpeed_kmh, beltSpeed_kmh, slipPercent, filteredTilt, stepRate, heartRate, temperature);
     }
   }
-
+//Thingspeak kikapcsolva ideiglenesen
   // ThingSpeak küldés 20 másodpercenként
-  if (now - lastThingSpeakTime >= 20000) {
-    lastThingSpeakTime = now;
-    if ((speedHistory[0] + speedHistory[1]) > 0.0) {  //adatküldés csak akkor, ha az utolsó két másodpercben nem nulla
-      // Adatok feltöltése a ThingSpeak-re
-      ThingSpeak.setField(1, filteredSpeed_kmh);  // Sebesség
-      ThingSpeak.setField(2, filteredTilt);       // Dőlésszög
-      ThingSpeak.setField(3, stepRate);           // Lépésszám (percre vetítve)
-      ThingSpeak.setField(4, temperature);        // Hőmérséklet
-      ThingSpeak.writeFields(YOUR_CHANNEL_ID, THINGSPEAK_API_KEY); // Feltöltés a ThingSpeak szerverre
-    }
-  }
+  // if (now - lastThingSpeakTime >= 20000) {
+  //   lastThingSpeakTime = now;
+  //   if ((speedHistory[0] + speedHistory[1]) > 0.0) {  //adatküldés csak akkor, ha az utolsó két másodpercben nem nulla
+  //     // Adatok feltöltése a ThingSpeak-re
+  //     ThingSpeak.setField(1, filteredSpeed_kmh);  // Sebesség
+  //     ThingSpeak.setField(2, filteredTilt);       // Dőlésszög
+  //     ThingSpeak.setField(3, stepRate);           // Lépésszám (percre vetítve)
+  //     ThingSpeak.setField(4, temperature);        // Hőmérséklet
+  //     ThingSpeak.writeFields(YOUR_CHANNEL_ID, THINGSPEAK_API_KEY); // Feltöltés a ThingSpeak szerverre
+  //   }
+  // }
 }
 
 
