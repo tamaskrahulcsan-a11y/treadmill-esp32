@@ -42,7 +42,9 @@ inline void startBLEScan() {
   }
 
   BLEScan* pBLEScan = BLEDevice::getScan();
-  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  //pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  static MyAdvertisedDeviceCallbacks advCallbacks;
+  pBLEScan->setAdvertisedDeviceCallbacks(&advCallbacks);
   pBLEScan->setActiveScan(true);
   pBLEScan->start(5, false);
   scanRunning = true;
