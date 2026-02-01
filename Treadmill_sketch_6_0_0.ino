@@ -110,7 +110,7 @@ float temperature = 0.0;    // Hőmérséklet változó
 String formattedTime;
 char buf[16]; //for time
 int debugLevel;
-
+bool heartRateBLEEnabled = false;
 
 // ================== IDŐZÍTÉSEK ==================
 unsigned long lastSpeedCalcTime = 0;
@@ -204,6 +204,12 @@ void serialPortHandling() {
       debugLevel = input.substring(4).toInt();
       Serial.print("New DEBUG level [0-3]: ");
       Serial.println(debugLevel);
+    }
+
+    else if (input.startsWith("HR ")) {
+      heartRateBLEEnabled = input.substring(3) == "1";
+      Serial.print("HR BLE enabled [0-1]: ");
+      Serial.println(heartRateBLEEnabled?1:0);
     }
 
     else if (input.startsWith("<!DOCTYPE html>")) {  //soros porton keresztül index.html (webszerver) feltöltése
@@ -420,7 +426,9 @@ void loop() {
   unsigned long now = millis();
 
   serialPortHandling();
-  updateHeartRate();
+  if (heartRateBLEEnabled){
+    updateHeartRate();
+  }
   logTreadmillDataLoop();
 
   // ===== MPU6050 olvasás (10 ms) =====
