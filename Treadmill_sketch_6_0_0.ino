@@ -38,8 +38,8 @@
 
 #define DEBUG 0
 
-#include "BLE_HEARTRATE.h"
-#include "TREADMILL_LOGGER.h"
+#include "BLE_HeartRate.h"
+#include "Treadmill_logger.h"
 
 // ================== HARDVER KONFIG ==================
 #define HALL_SENSOR_PIN 15  //szalagmozgató orsón levő szenzor 1 impulzus fordulatonként. Orsó átmérő 49mm
